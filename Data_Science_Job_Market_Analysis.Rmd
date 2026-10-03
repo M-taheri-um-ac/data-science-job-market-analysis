@@ -1,0 +1,196 @@
+---
+title: "Data Science Job Market Analysis"
+subtitle: "Salary Trends Across Experience Level, Work Setting, and Job Category"
+author: "Mahdi Taheri"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    code_folding: show
+    theme: readable
+    highlight: tango
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+library(dplyr)
+library(ggplot2)
+library(car)
+library(ggpubr)
+library(gtsummary)
+```
+
+# Executive Summary
+
+> This analysis of **5,004 cleaned data-science job records** (sourced from the "Jobs and Salaries in Data Science" dataset on Kaggle) examined how experience level, work arrangement, and job category relate to salary. Experience level, job category, and work setting were all statistically significant predictors of salary. **Machine Learning and AI roles command the highest premium** among job categories (+$48,227 relative to baseline), and — contrary to common assumption — **fully remote roles did not pay more than in-person roles**; hybrid arrangements were actually associated with the lowest average salaries. The final model explains **26.2%** of salary variance (Adjusted R²), indicating that while these factors matter, individual-level attributes not captured in this dataset (specific job title, years of experience, skill set) likely explain a substantial share of the remainder.
+
+---
+
+# 1. Data Cleaning (performed in SQL)
+
+Data cleaning for this project was carried out in MySQL prior to import into R. The full SQL script is available in `Self_Project.sql` in this repository. Summary of steps:
+
+| Step | Result |
+|---|---|
+| Raw records | 9,355 |
+| Duplicate records removed (via `ROW_NUMBER() OVER(PARTITION BY ...)`) | 4,351 |
+| Final clean records | 5,004 |
+| NULL values in key columns | 0 |
+| Inconsistent categorical text values | 0 |
+| Invalid (≤ 0) salary values | 0 |
+
+```{r load-data}
+df <- read.csv(choose.files())
+str(df)
+```
+
+---
+
+# 2. Exploratory Data Analysis
+
+## 2.1 Overall Salary Distribution
+
+```{r summary-stats}
+summary(df$salary_in_usd)
+```
+
+The median (\$140,000) is below the mean (\$146,294), indicating a right-skewed distribution driven by a smaller number of very high salaries.
+
+## 2.2 Salary by Experience Level
+
+```{r group-means}
+df %>% 
+  group_by(experience_level) %>% 
+  summarise(avg_salary = mean(salary_in_usd), n = n()) %>% 
+  arrange(desc(avg_salary))
+```
+
+```{r boxplot-experience, fig.width=9, fig.height=6}
+ggboxplot(df, x = "experience_level", y = "salary_in_usd", 
+          fill = "experience_level",
+          order = c("Entry-level", "Mid-level", "Senior", "Executive")) +
+  stat_compare_means(method = "kruskal.test", label.y = 480000) +
+  labs(title = "Salary Distribution by Experience Level",
+       y = "Salary (USD)", x = "Experience Level") +
+  theme(legend.position = "none")
+```
+
+**Why a boxplot?** A boxplot was used because it simultaneously displays the median, interquartile range, and outliers for each group, making it well-suited for comparing both central tendency and variability across multiple categories at once.
+
+**Observation on outliers:** Several high-salary outliers in the Mid-level group (e.g., Research Scientist, $450,000) were inspected individually and found to be legitimate, high-paying roles at large companies in high-cost-of-living countries — not data errors. This indicates that `experience_level` alone does not fully capture compensation; job role and company characteristics matter independently.
+
+---
+
+# 3. Checking Assumptions Before Hypothesis Testing
+
+Prior to hypothesis testing, the underlying assumptions of ANOVA — normality and homogeneity of variance — were explicitly checked rather than assumed, since violating them (particularly homogeneity of variance) can inflate the Type I error rate and lead to misleading p-values.
+
+## 3.1 Normality Check
+
+```{r anova-model}
+anova_model <- aov(salary_in_usd ~ experience_level, data = df)
+```
+
+```{r qqplot, fig.width=7, fig.height=6}
+qqnorm(residuals(anova_model))
+qqline(residuals(anova_model), col = "red")
+```
+
+**Interpretation:** Although minor deviation from the reference line was observed in the tails, this is expected given the large sample size (n = 5,004). By the Central Limit Theorem, the sampling distribution of the mean approximates normality regardless of minor deviations in the raw residual distribution, so this assumption was not treated as a serious concern.
+
+## 3.2 Homogeneity of Variance Check
+
+```{r levene}
+leveneTest(salary_in_usd ~ experience_level, data = df)
+```
+
+**Interpretation:** Levene's Test was used — rather than relying on visual inspection alone — because it provides a formal, objective test of whether group variances are statistically equal, a required assumption for classical ANOVA. The result (F(3, 5000) = 16.26, p < 0.001) indicated that variances were significantly unequal across experience-level groups. Unlike normality, this violation is not resolved by large sample size alone, especially when combined with unequal group sizes (Executive: n = 217 vs. Senior: n = 3,196). This motivated the use of Welch's ANOVA and Kruskal-Wallis instead of classical ANOVA.
+
+---
+
+# 4. Hypothesis Testing: Does Experience Level Affect Salary?
+
+## 4.1 Welch's ANOVA (does not assume equal variances)
+
+```{r welch}
+welch_result <- oneway.test(salary_in_usd ~ experience_level, data = df, var.equal = FALSE)
+welch_result
+```
+
+> Because the equal-variance assumption was violated, Welch's one-way ANOVA was used instead of classical ANOVA. The result (F(3, 729.73) = 393.04, p < 0.001) showed a statistically significant difference in mean salary across experience levels.
+
+## 4.2 Kruskal-Wallis Test (non-parametric confirmation)
+
+```{r kruskal}
+kruskal.test(salary_in_usd ~ experience_level, data = df)
+```
+
+> As a non-parametric confirmation independent of distributional assumptions, the Kruskal-Wallis test was also performed. The result (χ²(3) = 937.87, p < 0.001) corroborated the Welch ANOVA finding, confirming that salary distributions differ significantly across experience levels.
+
+---
+
+# 5. Multiple Linear Regression
+
+## 5.1 Model 1: Experience, Work Setting, Company Size
+
+```{r model1}
+model <- lm(salary_in_usd ~ experience_level + work_setting + company_size, data = df)
+summary(model)
+```
+
+> A multiple linear regression model was fitted with salary_in_usd as the outcome and experience_level, work_setting, and company_size as predictors. The model was statistically significant (F(7, 4996) = 163.8, p < 0.001), explaining 18.6% of the variance in salary (Adjusted R² = 0.1855).
+
+**Notable finding:** Relative to Hybrid (the reference level), both In-person (+\$32,848) and Remote (+\$21,559) roles pay more — hybrid arrangements show the lowest average salary among the three.
+
+## 5.2 Model 2: Adding Job Category
+
+```{r model2}
+model2 <- lm(salary_in_usd ~ experience_level + work_setting + company_size + job_category, data = df)
+summary(model2)
+```
+
+## 5.3 Formal Model Comparison
+
+```{r anova-compare}
+anova(model, model2)
+```
+
+> job_category was added to test whether job domain explains additional variance beyond experience and work arrangement. The expanded model significantly improved fit (F(9, 4987) = 58.76, p < 0.001), increasing explained variance from 18.6% to 26.2% (Adjusted R²). Machine Learning and AI roles showed the strongest positive effect on salary (+$48,227 relative to the baseline category).
+
+## 5.4 Clean Regression Table
+
+```{r gtsummary-table}
+tbl_regression(model2) %>% 
+  bold_p(t = 0.05) %>%
+  add_glance_source_note(include = c(adj.r.squared, nobs))
+```
+
+---
+
+# 6. Conclusion & Key Findings
+
+## 6.1 Summary Table
+
+| Analytical Question | Result |
+|---|---|
+| Does experience level affect salary? | Yes, significant (p < 0.001; confirmed by both Welch's ANOVA and Kruskal-Wallis) |
+| Which job category pays the most? | Machine Learning and AI (+$48,227 vs. baseline) |
+| Does work setting (remote/in-person) matter? | Yes, but counter to expectation — Hybrid has the *lowest* average salary |
+| How much salary variance does the final model explain? | 26.2% (Adjusted R²) |
+
+## 6.2 Limitations
+
+This analysis has several limitations. First, the model explains only 26% of salary variance, indicating unmeasured factors (e.g., specific job title, years of experience, individual skills) likely play a substantial role. Second, the dataset combines multiple years (2020–2024) without adjusting for inflation or market shifts over time. Third, `company_location` and `employee_residence` — known to strongly influence salary — were not included in the final model and represent a natural next step.
+
+## 6.3 Future Work
+
+- Incorporate `company_location` / `employee_residence` to capture geographic salary effects.
+- Model interaction effects between `job_category` and `experience_level`.
+- Build an interactive Shiny dashboard allowing users to filter by country, role, and experience level.
+
+---
+
+# Appendix: SQL Data Cleaning Script
+
+The complete SQL script used for deduplication and validation is included separately in this repository as `Self_Project.sql`.
