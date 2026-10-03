@@ -2,7 +2,7 @@
 
 Analysis of salary trends in data-related careers (2020–2024), using **SQL** for data cleaning and **R** for exploratory analysis, hypothesis testing, and regression modeling.
 
-📄 **[View the full analysis report (HTML)](report/Data_Science_Job_Market_Analysis.html)**
+📄 **[View the full analysis report (HTML)](Data_Science_Job_Market_Analysis.html)**
 
 ---
 
