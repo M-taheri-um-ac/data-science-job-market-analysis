@@ -49,4 +49,4 @@ Analysis of salary trends in data-related careers (2020–2024), using **SQL** f
 
 ## Author
 
-Mahdi
+Mahdi Taheri
